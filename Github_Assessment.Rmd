@@ -1,0 +1,238 @@
+---
+title: "Synthetic Data Regression Assessment"
+author: "Andrew Engellant"
+date: "2024-03-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# The following code splits performs an 80/20 split into training and testing data
+library(tidyverse,warn.conflicts = F)
+library(here)
+
+d.git <- read_tsv("knowlton_github.tsv")
+
+all.idx <- 1:nrow(d.git)
+assess.idx <- sample(all.idx,size=round(0.2*nrow(d.git),0))
+train.idx <- all.idx[!(all.idx %in% assess.idx)]
+
+d.assess <- d.git[assess.idx,]
+d.train <- d.git[train.idx,]
+```
+
+# Create a Regression Model
+```{r}
+# fit an initial model with all variables
+lm.git.initial <- lm(score ~ lines + stars + watchers +
+                forks + issues + 
+                language + 
+                license,
+                data=d.train)
+
+summary(lm.git.initial)
+anova(lm.git.initial, test = "Chisq")
+
+# license appears unhelpful
+```
+
+For initial exploration of the data, I built a model including all of the variables. The coefficients and analysis of variance can be viewed above. I noticed that both license did not appear to have a significant impact on the model or in the analysis of variance. The lines coefficient also did not appear important in the model, but showed significance in the analysis of variance. To assess this further I looked for any multi-colinearity in the data.
+```{r}
+#test for high correlations
+cor(d.train[, c("lines", "stars", "forks", "issues", "watchers", "score")])
+# Lines and issues appear to have a strong correlation. 
+```
+
+Issues and lines have a strong correlation. Perhaps this means that when there are more lines of code generally there are more opportunities for issues to exist. I decided to exclude both lines and license from my final model. I also performed some minor transformations on the continuous data to help clean-up the coefficients.
+
+```{r}
+# Fit new model without lines and license and transformed variables for nicer coefficients 
+lm.git <- lm(score ~ I(forks/10^4) +
+                I(stars/10^5) + 
+                I(issues/10^4) + 
+                I(watchers/10^3) + 
+                language,
+                data=d.train)
+
+summary(lm.git)
+anova(lm.git, test = "Chisq")
+```
+
+This final model is slightly better than the initial model, with an adjusted $R^2$ of `r summary(lm.git)$adj.r.squared`. This means just over `r round(summary(lm.git)$adj.r.squared,2)*100`% of the total variance in repository scores can be explained by this model. A typical prediction by this model is off from the actual score by an average of `r summary(lm.git)$sigma`. This model was created using only the training data. I then used the testing data to assess the model's performance.
+
+## Assessment of the Model
+```{r}
+# create a new column with predicted scores using the regression model
+d.assess <- d.assess %>%
+  mutate(pred_score = predict(lm.git, newdata = d.assess))
+
+# create a new column with residuals
+d.assess <- d.assess %>%
+  mutate(residuals = score - pred_score)
+
+# Calculate the sum of squares of residuals (RSS)
+SS_res <- sum(d.assess$residuals^2)
+
+# Calculate the mean of the observed values
+mean_observed <- mean(d.assess$score)
+
+# Calculate the total sum of squares (TSS)
+SS_tot <- sum((d.assess$score - mean_observed)^2)
+
+# Calculate R-squared
+R_squared <- 1 - (SS_res / SS_tot)
+
+
+# Calculate the residual standard error (RSE)
+n <- nrow(d.assess)  # Number of observations
+p <- length(coef(lm.git)) - 1  # Number of coefficients (excluding intercept)
+RSE <- sqrt(sum(d.assess$residuals^2) / (n - p - 1))
+
+# print results
+R_squared
+RSE
+```
+
+The $R^2$ value using this model on the testing data is `r R_squared` meaning only `r R_squared*100`% of the total variance in repository scores can be explained by this model. A typical prediction by this model is an average of `r RSE` away from the actual repository score. A graph of the predicted scores vs actual scores can be viewed below. 
+
+```{r}
+# plot the data with the model prediction
+ggplot(d.assess,
+       aes(x=pred_score,y=score)) + 
+  geom_point(alpha=0.33) + 
+  theme_minimal() + 
+  labs(x="Predicted Score",y="Actual Score") + 
+  geom_abline(slope=1,intercept=0,col="gray50")
+```
+
+Overall this model helps explain some of the variance in repository score, however much of the variation in scores are attributed to variables not included in this model. A list of the coefficients for each variable considered in this model can be observed below.
+
+```{r}
+arm::display(lm.git)
+```
+
+Having more forks, stars, issues, and watchers all appear to increase the predicted repository score. Each additional ten thousand forks is associated with a 0.14 increase in predicted score. A 100,000 unit increase in stars is associated with a 0.26 unit increase in predicted score. Interestingly, a 10,000 unit increase in issues is associated with a 0.45 unit increase in predicted score. A 1000 unit increase in watchers is also associated with a 0.29 unit increase in predicted score. Some languages such as HTML/CSS and JavaScript are predicted to have higher scores than other languages such as VBA and Python when the other variables are the same. 
+
+
+## Tree Model
+```{r}
+#install packages
+library(rpart)
+library(Hmisc)
+library(rpart.plot)
+library(PRROC)
+
+#create decision tree using rpart
+fit <- rpart(score ~ forks + 
+                stars + 
+                issues + 
+                watchers + 
+                language,
+                data=d.train,
+            method = "anova")
+
+#Display decision tree
+prp(fit, extra = 1, varlen = 0, faclen = 0, type = 2, branch = 0.5, compress = TRUE)
+```
+
+The above model is a depiction of the regression tree model created to model this data. The predicted vs actual scores graph can be viewed below, as well as the $R^2^ and residual standard error.
+
+```{r}
+#predict the outcome using the test dataset
+pred1 <- predict(fit, d.assess, type="vector")
+
+#Place the prediction variable back in the test dataset
+d.assess$pred1 <- pred1
+
+#Display predicted vs actual scores
+ggplot(d.assess,
+       aes(x=pred1, y=score)) + 
+  geom_point(alpha=0.33) + 
+  theme_minimal() + 
+  labs(x="Estimated Score",y="Actual Score") + 
+  geom_abline(slope=1,intercept=0,col="gray50")
+
+# Calculated R^2 and se
+actual_mean <- mean(d.assess$score)
+total_sum_squares <- sum((d.assess$score - actual_mean)^2)
+residual_sum_squares <- sum((d.assess$score - d.assess$pred1)^2)
+r_squared <- 1 - (residual_sum_squares / total_sum_squares)
+
+
+
+# create a new column with residuals
+d.assess <- d.assess %>%
+  mutate(t.residuals = score - pred1)
+
+# Calculate the sum of squares of residuals (RSS)
+SS_res <- sum(d.assess$t.residuals^2)
+
+# Calculate the mean of the observed values
+mean_observed <- mean(d.assess$score)
+
+# Calculate the total sum of squares (TSS)
+SS_tot <- sum((d.assess$score - mean_observed)^2)
+
+# Calculate R-squared
+R_squared <- 1 - (SS_res / SS_tot)
+
+
+# Calculate the residual standard error (RSE)
+n <- nrow(d.assess)  # Number of observations
+p <- length(coef(lm.git)) - 1  # Number of coefficients (excluding intercept)
+RSE <- sqrt(sum(d.assess$t.residuals^2) / (n - p - 1))
+
+# print results
+R_squared
+RSE
+```
+
+This regression tree model has the same $R^2$ and $s_e$ values as the linear regression model. 
+
+
+
+```{r}
+######
+#ROC Curve
+#The only think you need to change below is: 
+#1) the name of your datasets. For example, grad.test$ below should be the name of your testing dataset.  
+#2) On lines 99 and 100, the 1 and 0 should reflect the values of your dependent variable.
+######
+
+
+
+# for ROC curve we need probabilties so we can sort d.train
+# depvariable <- "score"
+# 
+# predictions <- predict(fit, d.assess, type = "vector")
+# d.assess$pred <- predictions# returns prob of both cats, just need 1
+# 
+# roc.data <- data.frame(cutoffs = c(1,sort(unique(d.assess$pred),decreasing=T)),
+#                        TP.at.cutoff = 0,
+#                        TN.at.cutoff = 0)
+# 
+# for(i in 1:dim(roc.data)[1]){
+#   this.cutoff <- roc.data[i,"cutoffs"]
+#   roc.data$TP.at.cutoff[i] <- sum(d.assess[d.assess$pred >= this.cutoff,depvariable] == 1)
+#   roc.data$TN.at.cutoff[i] <- sum(d.assess[d.assess$pred < this.cutoff,depvariable] == 0)
+# }
+# roc.data$TPR <- roc.data$TP.at.cutoff/max(roc.data$TP.at.cutoff)
+# roc.data$Specificity <- roc.data$TN.at.cutoff/max(roc.data$TN.at.cutoff)
+# roc.data$FPR <- 1 - roc.data$Specificity
+# 
+# with(roc.data,
+#      plot(x=FPR,
+#           y=TPR,
+#           type = "l",
+#           xlim=c(0,1),
+#           ylim=c(0,1),
+#           main="ROC Curve'")
+# )
+# abline(c(0,1),lty=2)
+######End ROC code
+```
+
+ROC curve does not work because dependent variable is a continuous variable and so TPR and FPR cannot be calculated and cannot be used for the ROC curve. How do I best assess the fit of my tree model? 
