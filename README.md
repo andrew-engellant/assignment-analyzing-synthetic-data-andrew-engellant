@@ -20,3 +20,13 @@ you how good a job the models did uncovering the data generating process.
 8. Post your knitted results to the forum on Moodle at the bottom of the Week 8 page. Let the data creator know you've posted so they can review your work. 
 
 I implore you: read your finished knitted document! By this point in the semester you should be producing reports that look good and are free of typos. 
+
+## Feedback 
+
+This is a very boring title at the top here...
+
+Nice job on the analysis for the linear model. The relationship between lines and issues was a good one to uncover. One thing I'd typically do is re-fit the model and run an anova with lines included after issues. Then you may get a better sense of its importance. 
+
+You're doing all the right things on assessing your tree model. Since you're doing a regression tree, you're limiited to things like R^2, RMSE, MAE, etc. 
+
+Theoretically I'd be interested in a more explicit comparison of the values you're finding, but that's not enough to require a revision. Nice work. 
